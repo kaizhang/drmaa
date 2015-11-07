@@ -4,6 +4,7 @@
 module DRMAA where
 
 import Control.Concurrent.Async (mapConcurrently)
+import Control.Exception (bracket_)
 import qualified Data.Text as T
 import Shelly hiding (FilePath)
 
@@ -19,9 +20,11 @@ C.include "drmaa.h"
 
 runScriptBulk :: [String] -> IO ()
 runScriptBulk xs = do
-    drmaaInit
-    _ <- mapConcurrently drmaaScript xs
-    drmaaExit
+    _ <- withSGESession $ mapConcurrently drmaaScript xs
+    return ()
+
+withSGESession :: IO a -> IO a
+withSGESession f = bracket_ drmaaInit drmaaExit f
 
 drmaaScript :: String -> IO ()
 drmaaScript script = do
@@ -30,7 +33,7 @@ drmaaScript script = do
              head $ T.lines tmp
     writeFile tmpFl $ "#!/bin/sh\n" ++ script
     shelly $ run_ "chmod" ["+x", T.pack tmpFl]
-    drmaaRun tmpFl []
+    drmaaRun tmpFl [] defaultDrmaaConfig
     shelly $ rm $ fromText $ T.pack tmpFl
 
 -- | Initialize a session
@@ -45,7 +48,7 @@ drmaaInit = alloca $ \ptr -> do
         return 0;
         }|]
     case status of
-        0 -> return ()
+        0 -> putStrLn "DRMAA session started"
         1 -> peekCString ptr >>= error
 
 drmaaExit :: IO ()
@@ -61,12 +64,20 @@ drmaaExit = do
         return 0;
         }|]
     case r of
-        0 -> return ()
+        0 -> putStrLn "DRMAA session closed"
         1 -> error "Exit 1"
 
-drmaaRun :: FilePath -> [String] -> IO ()
-drmaaRun exec args = do
+data DrmaaAttribute = DrmaaAttribute
+    { drmaa_wd :: FilePath } deriving (Show, Read)
+
+defaultDrmaaConfig :: DrmaaAttribute
+defaultDrmaaConfig = DrmaaAttribute
+    { drmaa_wd = "./" }
+
+drmaaRun :: FilePath -> [String] -> DrmaaAttribute -> IO ()
+drmaaRun exec args config = do
     c_exec <- newCString exec
+    wd <- newCString $ drmaa_wd config
     c_args <- mapM newCString args
     withArray (c_args++[nullPtr]) $ \aptr -> do
         [C.block| int {
@@ -79,6 +90,10 @@ drmaaRun exec args = do
         if (errnum != DRMAA_ERRNO_SUCCESS) {
             fprintf (stderr, "Could not create job template: %s\n", error);
         } else {
+            /* set work directory */
+            errnum = drmaa_set_attribute (jt, DRMAA_WD, $(char* wd),
+                                         error, DRMAA_ERROR_STRING_BUFFER);
+
             errnum = drmaa_set_attribute (jt, DRMAA_REMOTE_COMMAND, $(char* c_exec),
                                          error, DRMAA_ERROR_STRING_BUFFER);
             if (errnum != DRMAA_ERRNO_SUCCESS) {

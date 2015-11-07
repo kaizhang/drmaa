@@ -31,7 +31,7 @@ int inline_c_DRMAA_1_df791815daa185d543e0513c42f96dbbd8b8b214() {
 }
 
 
-int inline_c_DRMAA_2_1f86e7ab4af5739f8bc903ae26ec320a2a1198a6(char * c_exec_inline_c_0, const char ** aptr_inline_c_1) {
+int inline_c_DRMAA_2_738cf4ffac359488c2a4c6a56827a1c9fa43cc66(char * wd_inline_c_0, char * c_exec_inline_c_1, const char ** aptr_inline_c_2) {
 
         char error[DRMAA_ERROR_STRING_BUFFER];
         int errnum = 0;
@@ -42,14 +42,18 @@ int inline_c_DRMAA_2_1f86e7ab4af5739f8bc903ae26ec320a2a1198a6(char * c_exec_inli
         if (errnum != DRMAA_ERRNO_SUCCESS) {
             fprintf (stderr, "Could not create job template: %s\n", error);
         } else {
-            errnum = drmaa_set_attribute (jt, DRMAA_REMOTE_COMMAND, c_exec_inline_c_0,
+            /* set work directory */
+            errnum = drmaa_set_attribute (jt, DRMAA_WD, wd_inline_c_0,
+                                         error, DRMAA_ERROR_STRING_BUFFER);
+
+            errnum = drmaa_set_attribute (jt, DRMAA_REMOTE_COMMAND, c_exec_inline_c_1,
                                          error, DRMAA_ERROR_STRING_BUFFER);
             if (errnum != DRMAA_ERRNO_SUCCESS) {
                 fprintf (stderr, "Could not set attribute \"%s\": %s\n",
                         DRMAA_REMOTE_COMMAND, error);
             } else {
                 /*const char *args[6] = {"bamtobed", "-i", "project/bingfei/results/ATACSeq/ATAC_memory_rep1.filt.nodup.srt.bam", NULL};*/
-                errnum = drmaa_set_vector_attribute (jt, DRMAA_V_ARGV, aptr_inline_c_1, error,
+                errnum = drmaa_set_vector_attribute (jt, DRMAA_V_ARGV, aptr_inline_c_2, error,
                                                     DRMAA_ERROR_STRING_BUFFER);
             }
 
