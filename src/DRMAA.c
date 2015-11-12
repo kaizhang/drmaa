@@ -31,108 +31,115 @@ int inline_c_DRMAA_1_df791815daa185d543e0513c42f96dbbd8b8b214() {
 }
 
 
-int inline_c_DRMAA_2_738cf4ffac359488c2a4c6a56827a1c9fa43cc66(char * wd_inline_c_0, char * c_exec_inline_c_1, const char ** aptr_inline_c_2) {
+int inline_c_DRMAA_2_8a61df62930500de4fadeb5b59e37e80f1ee1def(char * wd_inline_c_0, char * c_exec_inline_c_1, const char ** envPtr_inline_c_2, const char ** aptr_inline_c_3) {
 
-        char error[DRMAA_ERROR_STRING_BUFFER];
-        int errnum = 0;
-        drmaa_job_template_t *jt = NULL;
+            int exception = 0;
+            char error[DRMAA_ERROR_STRING_BUFFER];
+            int errnum = 0;
+            drmaa_job_template_t *jt = NULL;
 
-        errnum = drmaa_allocate_job_template (&jt, error, DRMAA_ERROR_STRING_BUFFER);
-
-        if (errnum != DRMAA_ERRNO_SUCCESS) {
-            fprintf (stderr, "Could not create job template: %s\n", error);
-        } else {
-            /* set work directory */
-            errnum = drmaa_set_attribute (jt, DRMAA_WD, wd_inline_c_0,
-                                         error, DRMAA_ERROR_STRING_BUFFER);
-
-            errnum = drmaa_set_attribute (jt, DRMAA_REMOTE_COMMAND, c_exec_inline_c_1,
-                                         error, DRMAA_ERROR_STRING_BUFFER);
-            if (errnum != DRMAA_ERRNO_SUCCESS) {
-                fprintf (stderr, "Could not set attribute \"%s\": %s\n",
-                        DRMAA_REMOTE_COMMAND, error);
-            } else {
-                /*const char *args[6] = {"bamtobed", "-i", "project/bingfei/results/ATACSeq/ATAC_memory_rep1.filt.nodup.srt.bam", NULL};*/
-                errnum = drmaa_set_vector_attribute (jt, DRMAA_V_ARGV, aptr_inline_c_2, error,
-                                                    DRMAA_ERROR_STRING_BUFFER);
-            }
+            errnum = drmaa_allocate_job_template (&jt, error, DRMAA_ERROR_STRING_BUFFER);
 
             if (errnum != DRMAA_ERRNO_SUCCESS) {
-                fprintf (stderr, "Could not set attribute \"%s\": %s\n",
-                        DRMAA_REMOTE_COMMAND, error);
+                fprintf (stderr, "Could not create job template: %s\n", error);
             } else {
-                char jobid[DRMAA_JOBNAME_BUFFER];
-                char jobid_out[DRMAA_JOBNAME_BUFFER];
-                int status = 0;
-                drmaa_attr_values_t *rusage = NULL;
+                /* set tmp dir */
+                /* set work directory */
+                errnum = drmaa_set_attribute (jt, DRMAA_WD, wd_inline_c_0,
+                                             error, DRMAA_ERROR_STRING_BUFFER);
 
-                errnum = drmaa_run_job (jobid, DRMAA_JOBNAME_BUFFER, jt, error,
-                                       DRMAA_ERROR_STRING_BUFFER);
+                errnum = drmaa_set_attribute (jt, DRMAA_REMOTE_COMMAND, c_exec_inline_c_1,
+                                             error, DRMAA_ERROR_STRING_BUFFER);
+                errnum = drmaa_vector_attribute (jt, DRMAA_V_ENV, envPtr_inline_c_2,
+                                             error, DRMAA_ERROR_STRING_BUFFER);
+                if (errnum != DRMAA_ERRNO_SUCCESS) {
+                    fprintf (stderr, "Could not set attribute \"%s\": %s\n",
+                            DRMAA_REMOTE_COMMAND, error);
+                } else {
+                    errnum = drmaa_set_vector_attribute (jt, DRMAA_V_ARGV, aptr_inline_c_3, error,
+                                                        DRMAA_ERROR_STRING_BUFFER);
+                }
 
                 if (errnum != DRMAA_ERRNO_SUCCESS) {
-                    fprintf (stderr, "Could not submit job: %s\n", error);
+                    fprintf (stderr, "Could not set attribute \"%s\": %s\n",
+                            DRMAA_REMOTE_COMMAND, error);
                 } else {
-                    printf ("Your job has been submitted with id %s\n", jobid);
+                    char jobid[DRMAA_JOBNAME_BUFFER];
+                    char jobid_out[DRMAA_JOBNAME_BUFFER];
+                    int status = 0;
+                    drmaa_attr_values_t *rusage = NULL;
 
-                    errnum = drmaa_wait (jobid, jobid_out, DRMAA_JOBNAME_BUFFER, &status,
-                                        DRMAA_TIMEOUT_WAIT_FOREVER, &rusage, error,
-                                        DRMAA_ERROR_STRING_BUFFER);
+                    errnum = drmaa_run_job (jobid, DRMAA_JOBNAME_BUFFER, jt, error,
+                                           DRMAA_ERROR_STRING_BUFFER);
 
                     if (errnum != DRMAA_ERRNO_SUCCESS) {
-                        fprintf (stderr, "Could not wait for job: %s\n", error);
+                        fprintf (stderr, "Could not submit job: %s\n", error);
+                        exception = 1;
                     } else {
-                        char usage[DRMAA_ERROR_STRING_BUFFER];
-                        int aborted = 0;
+                        printf ("Your job has been submitted with id %s\n", jobid);
 
-                        drmaa_wifaborted(&aborted, status, NULL, 0);
+                        errnum = drmaa_wait (jobid, jobid_out, DRMAA_JOBNAME_BUFFER, &status,
+                                            DRMAA_TIMEOUT_WAIT_FOREVER, &rusage, error,
+                                            DRMAA_ERROR_STRING_BUFFER);
 
-                        if (aborted == 1) {
-                            printf("Job %s never ran\n", jobid);
+                        if (errnum != DRMAA_ERRNO_SUCCESS) {
+                            fprintf (stderr, "Could not wait for job: %s\n", error);
+                            exception = 1;
                         } else {
-                            int exited = 0;
+                            char usage[DRMAA_ERROR_STRING_BUFFER];
+                            int aborted = 0;
 
-                            drmaa_wifexited(&exited, status, NULL, 0);
+                            drmaa_wifaborted(&aborted, status, NULL, 0);
 
-                            if (exited == 1) {
-                                int exit_status = 0;
-
-                                drmaa_wexitstatus(&exit_status, status, NULL, 0);
-                                printf("Job %s finished regularly with exit status %d\n", jobid, exit_status);
+                            if (aborted == 1) {
+                                printf("Job %s never ran\n", jobid);
+                                exception = 1;
                             } else {
-                                int signaled = 0;
+                                int exited = 0;
 
-                                drmaa_wifsignaled(&signaled, status, NULL, 0);
+                                drmaa_wifexited(&exited, status, NULL, 0);
 
-                                if (signaled == 1) {
-                                    char termsig[DRMAA_SIGNAL_BUFFER+1];
+                                if (exited == 1) {
+                                    int exit_status = 0;
 
-                                    drmaa_wtermsig(termsig, DRMAA_SIGNAL_BUFFER, status, NULL, 0);
-                                    printf("Job %s finished due to signal %s\n", jobid, termsig);
+                                    drmaa_wexitstatus(&exit_status, status, NULL, 0);
+                                    printf("Job %s finished regularly with exit status %d\n", jobid, exit_status);
+                                    exception = exit_status;
                                 } else {
-                                    printf("Job %s finished with unclear conditions\n", jobid);
-                                }
+                                    int signaled = 0;
+
+                                    drmaa_wifsignaled(&signaled, status, NULL, 0);
+
+                                    if (signaled == 1) {
+                                        char termsig[DRMAA_SIGNAL_BUFFER+1];
+
+                                        drmaa_wtermsig(termsig, DRMAA_SIGNAL_BUFFER, status, NULL, 0);
+                                        printf("Job %s finished due to signal %s\n", jobid, termsig);
+                                    } else {
+                                        printf("Job %s finished with unclear conditions\n", jobid);
+                                    }
+                                } /* else */
                             } /* else */
+
+                            printf ("Job Usage:\n");
+
+                            while (drmaa_get_next_attr_value (rusage, usage, DRMAA_ERROR_STRING_BUFFER) == DRMAA_ERRNO_SUCCESS) {
+                                printf ("  %s\n", usage);
+                            }
+
+                            drmaa_release_attr_values (rusage);
                         } /* else */
-
-                        printf ("Job Usage:\n");
-
-                        while (drmaa_get_next_attr_value (rusage, usage, DRMAA_ERROR_STRING_BUFFER) == DRMAA_ERRNO_SUCCESS) {
-                            printf ("  %s\n", usage);
-                        }
-
-                        drmaa_release_attr_values (rusage);
                     } /* else */
                 } /* else */
+
+                errnum = drmaa_delete_job_template (jt, error, DRMAA_ERROR_STRING_BUFFER);
+
+                if (errnum != DRMAA_ERRNO_SUCCESS) {
+                    fprintf (stderr, "Could not delete job template: %s\n", error);
+                }
             } /* else */
 
-            errnum = drmaa_delete_job_template (jt, error, DRMAA_ERROR_STRING_BUFFER);
-
-            if (errnum != DRMAA_ERRNO_SUCCESS) {
-                fprintf (stderr, "Could not delete job template: %s\n", error);
-            }
-        } /* else */
-
-        return 0;
-        
+            return exception;
+            
 }
 
