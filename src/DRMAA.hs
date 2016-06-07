@@ -3,11 +3,8 @@
 {-# LANGUAGE TemplateHaskell   #-}
 module DRMAA where
 
-import           Control.Concurrent.Async (mapConcurrently)
 import           Control.Exception        (bracket_, bracket)
 import qualified Data.Text                as T
-import qualified Data.ByteString.Lazy as B
-import Data.Binary
 import           Shelly                   hiding (FilePath, withTmpDir)
 
 import           Foreign.C.String
@@ -33,11 +30,6 @@ withTmpDir dir = bracket create delete
     create = shelly $ fmap (T.unpack . head . T.lines) $ silently $
         run "mktemp" ["-d", T.pack $ dir ++ "/tmp_dir_XXXXXXXX_delete.me"]
     delete = shelly . rm_rf . fromText . T.pack
-
-runScriptBulk :: [String] -> DrmaaAttribute -> IO ()
-runScriptBulk xs config = do
-    _ <- withSGESession $ mapConcurrently (\x -> drmaaScript x config) xs
-    return ()
 
 withSGESession :: IO a -> IO a
 withSGESession f = bracket_ drmaaInit drmaaExit f
@@ -66,7 +58,7 @@ drmaaInit = alloca $ \ptr -> do
         }|]
     case status of
         0 -> putStrLn "DRMAA session started"
-        1 -> peekCString ptr >>= error
+        _ -> peekCString ptr >>= error
 
 drmaaExit :: IO ()
 drmaaExit = do
@@ -82,7 +74,7 @@ drmaaExit = do
         }|]
     case r of
         0 -> putStrLn "DRMAA session closed"
-        1 -> error "Exit 1"
+        _ -> error "Exit 1"
 
 data DrmaaAttribute = DrmaaAttribute
     { drmaa_wd     :: !FilePath
@@ -96,13 +88,6 @@ defaultDrmaaConfig = DrmaaAttribute
     , drmaa_env = [ ("DRMAA_ENV_HAS_SET", "True") ]
     , drmaa_native = ""
     }
-
-drmaaRun' :: (Binary a, Binary b) => FilePath -> FilePath -> [String] -> a -> DrmaaAttribute -> IO b
-drmaaRun' tmp exec args input config = do
-    withTmpFile tmp $ \inputFl -> withTmpFile tmp $ \outputFl -> do
-        B.writeFile inputFl $ encode input
-        drmaaRun exec (args ++ [inputFl, outputFl]) config
-        fmap decode $ B.readFile outputFl
 
 drmaaRun :: FilePath -> [String] -> DrmaaAttribute -> IO ()
 drmaaRun exec args config = do
