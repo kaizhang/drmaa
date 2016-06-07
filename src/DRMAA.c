@@ -31,7 +31,7 @@ int inline_c_DRMAA_1_df791815daa185d543e0513c42f96dbbd8b8b214() {
 }
 
 
-int inline_c_DRMAA_2_8a61df62930500de4fadeb5b59e37e80f1ee1def(char * wd_inline_c_0, char * c_exec_inline_c_1, const char ** envPtr_inline_c_2, const char ** aptr_inline_c_3) {
+int inline_c_DRMAA_2_8569c20fd54d45f727dd1560458a1febedbc42e1(char * wd_inline_c_0, const char ** envPtr_inline_c_1, char * native_inline_c_2, char * c_exec_inline_c_3, const char ** aptr_inline_c_4) {
 
             int exception = 0;
             char error[DRMAA_ERROR_STRING_BUFFER];
@@ -43,20 +43,21 @@ int inline_c_DRMAA_2_8a61df62930500de4fadeb5b59e37e80f1ee1def(char * wd_inline_c
             if (errnum != DRMAA_ERRNO_SUCCESS) {
                 fprintf (stderr, "Could not create job template: %s\n", error);
             } else {
-                /* set tmp dir */
-                /* set work directory */
+                /* set options */
                 errnum = drmaa_set_attribute (jt, DRMAA_WD, wd_inline_c_0,
                                              error, DRMAA_ERROR_STRING_BUFFER);
-
-                errnum = drmaa_set_attribute (jt, DRMAA_REMOTE_COMMAND, c_exec_inline_c_1,
+                errnum = drmaa_set_vector_attribute (jt, DRMAA_V_ENV, envPtr_inline_c_1,
                                              error, DRMAA_ERROR_STRING_BUFFER);
-                errnum = drmaa_vector_attribute (jt, DRMAA_V_ENV, envPtr_inline_c_2,
+                errnum = drmaa_set_attribute (jt, DRMAA_NATIVE_SPECIFICATION, native_inline_c_2,
+                                             error, DRMAA_ERROR_STRING_BUFFER);
+
+                errnum = drmaa_set_attribute (jt, DRMAA_REMOTE_COMMAND, c_exec_inline_c_3,
                                              error, DRMAA_ERROR_STRING_BUFFER);
                 if (errnum != DRMAA_ERRNO_SUCCESS) {
                     fprintf (stderr, "Could not set attribute \"%s\": %s\n",
                             DRMAA_REMOTE_COMMAND, error);
                 } else {
-                    errnum = drmaa_set_vector_attribute (jt, DRMAA_V_ARGV, aptr_inline_c_3, error,
+                    errnum = drmaa_set_vector_attribute (jt, DRMAA_V_ARGV, aptr_inline_c_4, error,
                                                         DRMAA_ERROR_STRING_BUFFER);
                 }
 

@@ -4,7 +4,7 @@
 name:                drmaa
 version:             0.1.0.0
 -- synopsis:
--- description:
+description:         A simple Haskell bindings to drmaa library.
 license:             BSD3
 license-file:        LICENSE
 author:              Kai Zhang
@@ -16,7 +16,7 @@ extra-source-files:  ChangeLog.md
 cabal-version:       >=1.10
 
 library
-  ghc-options:         -O2 -threaded
+  ghc-options:         -threaded
   exposed-modules:
     DRMAA
 
@@ -24,6 +24,8 @@ library
   -- other-extensions:
   build-depends:
       base >=4.7 && <5.0
+    , bytestring
+    , binary
     , async
     , inline-c
     , text

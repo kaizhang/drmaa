@@ -4,9 +4,11 @@
 module DRMAA where
 
 import           Control.Concurrent.Async (mapConcurrently)
-import           Control.Exception        (bracket_)
+import           Control.Exception        (bracket_, bracket)
 import qualified Data.Text                as T
-import           Shelly                   hiding (FilePath)
+import qualified Data.ByteString.Lazy as B
+import Data.Binary
+import           Shelly                   hiding (FilePath, withTmpDir)
 
 import           Foreign.C.String
 import           Foreign.Marshal.Alloc
@@ -18,6 +20,20 @@ C.include "stddef.h"
 C.include "stdio.h"
 C.include "drmaa.h"
 
+withTmpFile :: FilePath -> (FilePath -> IO a) -> IO a
+withTmpFile dir = bracket create delete
+  where
+    create = shelly $ fmap (T.unpack . head . T.lines) $ silently $
+        run "mktemp" [T.pack $ dir ++ "/tmp_file_XXXXXXXX_delete.me"]
+    delete = shelly . rm_f . fromText . T.pack
+
+withTmpDir :: FilePath -> (FilePath -> IO a) -> IO a
+withTmpDir dir = bracket create delete
+  where
+    create = shelly $ fmap (T.unpack . head . T.lines) $ silently $
+        run "mktemp" ["-d", T.pack $ dir ++ "/tmp_dir_XXXXXXXX_delete.me"]
+    delete = shelly . rm_rf . fromText . T.pack
+
 runScriptBulk :: [String] -> DrmaaAttribute -> IO ()
 runScriptBulk xs config = do
     _ <- withSGESession $ mapConcurrently (\x -> drmaaScript x config) xs
@@ -27,14 +43,15 @@ withSGESession :: IO a -> IO a
 withSGESession f = bracket_ drmaaInit drmaaExit f
 
 drmaaScript :: String -> DrmaaAttribute -> IO ()
-drmaaScript script config = do
-    tmp <- shelly $ silently $ run "mktemp" ["ghc_script_tmp.XXXXXXXX.sh"]
-    tmpFl <- shelly $ fmap (T.unpack . toTextIgnore) $ absPath $ fromText $
-             head $ T.lines tmp
-    writeFile tmpFl $ "#!/bin/sh\n" ++ script
-    shelly $ run_ "chmod" ["+x", T.pack tmpFl]
-    drmaaRun tmpFl [] config
-    shelly $ rm $ fromText $ T.pack tmpFl
+drmaaScript script config = bracket
+    (shelly $ fmap (T.unpack . head . T.lines) $ silently $ run "mktemp" [template])
+    (shelly . rm . fromText . T.pack)
+    $ \tmpFl -> do
+        writeFile tmpFl $ "#!/bin/sh\n" ++ script
+        shelly $ run_ "chmod" ["+x", T.pack tmpFl]
+        drmaaRun tmpFl [] config
+  where
+    template = T.pack $ drmaa_wd config ++ "/drmaa_script.XXXXXXXX.delete.me.sh"
 
 -- | Initialize a session
 drmaaInit :: IO ()
@@ -69,24 +86,34 @@ drmaaExit = do
 
 data DrmaaAttribute = DrmaaAttribute
     { drmaa_wd     :: !FilePath
-    , drmaa_tmpDir :: !FilePath   -- temperary directory. Trying access the
-                                  -- default temp dir usually causes problem in
-                                  -- a cluster
+    , drmaa_env :: ![(String, String)]
+    , drmaa_native :: !String
     } deriving (Show, Read)
 
 defaultDrmaaConfig :: DrmaaAttribute
 defaultDrmaaConfig = DrmaaAttribute
     { drmaa_wd = "./"
-    , drmaa_tmpDir = "./drmaa_tmp"
+    , drmaa_env = [ ("DRMAA_ENV_HAS_SET", "True") ]
+    , drmaa_native = ""
     }
+
+drmaaRun' :: (Binary a, Binary b) => FilePath -> FilePath -> [String] -> a -> DrmaaAttribute -> IO b
+drmaaRun' tmp exec args input config = do
+    withTmpFile tmp $ \inputFl -> withTmpFile tmp $ \outputFl -> do
+        B.writeFile inputFl $ encode input
+        drmaaRun exec (args ++ [inputFl, outputFl]) config
+        fmap decode $ B.readFile outputFl
 
 drmaaRun :: FilePath -> [String] -> DrmaaAttribute -> IO ()
 drmaaRun exec args config = do
-    wd <- newCString $ drmaa_wd config
     c_exec <- newCString exec
-
-    env <- mapM newCString ["TMPDIR=" ++ drmaa_tmpDir config]
     c_args <- mapM newCString args
+
+    -- options
+    wd <- newCString $ drmaa_wd config
+    env <- mapM (\(a,b) -> newCString $ a ++ "=" ++ b) $ drmaa_env config
+    native <- newCString $ drmaa_native config
+
     e <- withArray (c_args++[nullPtr]) $ \aptr ->
         withArray (env ++ [nullPtr]) $ \envPtr -> do
             [C.block| int {
@@ -100,14 +127,15 @@ drmaaRun exec args config = do
             if (errnum != DRMAA_ERRNO_SUCCESS) {
                 fprintf (stderr, "Could not create job template: %s\n", error);
             } else {
-                /* set tmp dir */
-                /* set work directory */
+                /* set options */
                 errnum = drmaa_set_attribute (jt, DRMAA_WD, $(char* wd),
+                                             error, DRMAA_ERROR_STRING_BUFFER);
+                errnum = drmaa_set_vector_attribute (jt, DRMAA_V_ENV, $(const char** envPtr),
+                                             error, DRMAA_ERROR_STRING_BUFFER);
+                errnum = drmaa_set_attribute (jt, DRMAA_NATIVE_SPECIFICATION, $(char* native),
                                              error, DRMAA_ERROR_STRING_BUFFER);
 
                 errnum = drmaa_set_attribute (jt, DRMAA_REMOTE_COMMAND, $(char* c_exec),
-                                             error, DRMAA_ERROR_STRING_BUFFER);
-                errnum = drmaa_vector_attribute (jt, DRMAA_V_ENV, $(const char** envPtr),
                                              error, DRMAA_ERROR_STRING_BUFFER);
                 if (errnum != DRMAA_ERRNO_SUCCESS) {
                     fprintf (stderr, "Could not set attribute \"%s\": %s\n",
