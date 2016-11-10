@@ -31,7 +31,7 @@ int inline_c_DRMAA_1_df791815daa185d543e0513c42f96dbbd8b8b214() {
 }
 
 
-int inline_c_DRMAA_2_8569c20fd54d45f727dd1560458a1febedbc42e1(char * wd_inline_c_0, const char ** envPtr_inline_c_1, char * native_inline_c_2, char * c_exec_inline_c_3, const char ** aptr_inline_c_4) {
+int inline_c_DRMAA_2_f3edb2a436e7c708ac077181355a61d0a274be4a(char * wd_inline_c_0, const char ** envPtr_inline_c_1, char * native_inline_c_2, char * c_exec_inline_c_3, const char ** aptr_inline_c_4) {
 
             int exception = 0;
             char error[DRMAA_ERROR_STRING_BUFFER];
@@ -122,11 +122,13 @@ int inline_c_DRMAA_2_8569c20fd54d45f727dd1560458a1febedbc42e1(char * wd_inline_c
                                 } /* else */
                             } /* else */
 
+                            /*
                             printf ("Job Usage:\n");
 
                             while (drmaa_get_next_attr_value (rusage, usage, DRMAA_ERROR_STRING_BUFFER) == DRMAA_ERRNO_SUCCESS) {
                                 printf ("  %s\n", usage);
                             }
+                            */
 
                             drmaa_release_attr_values (rusage);
                         } /* else */

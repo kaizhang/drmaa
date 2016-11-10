@@ -3,15 +3,15 @@
 {-# LANGUAGE TemplateHaskell   #-}
 module DRMAA where
 
-import           Control.Exception        (bracket_, bracket)
-import qualified Data.Text                as T
-import           Shelly                   hiding (FilePath, withTmpDir)
-
+import           Control.Exception     (bracket, bracket_)
+import qualified Data.Text             as T
 import           Foreign.C.String
 import           Foreign.Marshal.Alloc
 import           Foreign.Marshal.Array
 import           Foreign.Ptr
-import qualified Language.C.Inline        as C
+import qualified Language.C.Inline     as C
+import           Shelly                hiding (FilePath, withTmpDir)
+import           Text.Printf           (printf)
 
 C.include "stddef.h"
 C.include "stdio.h"
@@ -56,9 +56,7 @@ drmaaInit = alloca $ \ptr -> do
         }
         return 0;
         }|]
-    case status of
-        0 -> putStrLn "DRMAA session started"
-        _ -> peekCString ptr >>= error
+    when (status /= 0) $ peekCString ptr >>= error
 
 drmaaExit :: IO ()
 drmaaExit = do
@@ -72,13 +70,11 @@ drmaaExit = do
         }
         return 0;
         }|]
-    case r of
-        0 -> putStrLn "DRMAA session closed"
-        _ -> error "Exit 1"
+    when (r /= 0) $ error "Exit 1"
 
 data DrmaaAttribute = DrmaaAttribute
     { drmaa_wd     :: !FilePath
-    , drmaa_env :: ![(String, String)]
+    , drmaa_env    :: ![(String, String)]
     , drmaa_native :: !String
     } deriving (Show, Read)
 
@@ -191,11 +187,13 @@ drmaaRun exec args config = do
                                 } /* else */
                             } /* else */
 
+                            /*
                             printf ("Job Usage:\n");
 
                             while (drmaa_get_next_attr_value (rusage, usage, DRMAA_ERROR_STRING_BUFFER) == DRMAA_ERRNO_SUCCESS) {
                                 printf ("  %s\n", usage);
                             }
+                            */
 
                             drmaa_release_attr_values (rusage);
                         } /* else */
@@ -211,4 +209,6 @@ drmaaRun exec args config = do
 
             return exception;
             }|]
-    if e /= 0 then error ("status=" ++ show e) else return ()
+    when (e/=0) $ error $ printf
+        "Job failed (status=%d). Please see SGE log for details"
+        (fromIntegral e :: Int)
