@@ -1,39 +1,32 @@
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE QuasiQuotes       #-}
-{-# LANGUAGE TemplateHaskell   #-}
-module DRMAA where
+{-# LANGUAGE QuasiQuotes     #-}
+{-# LANGUAGE TemplateHaskell #-}
+module DRMAA
+    ( withSession
+    , initSession
+    , exitSession
+    , DrmaaAttribute(..)
+    , defaultDrmaaConfig
+    , drmaaRun
+    ) where
 
-import           Control.Exception     (bracket, bracket_)
-import qualified Data.Text             as T
+import           Control.Exception     (bracket_)
+import           Control.Monad         (when)
 import           Foreign.C.String
 import           Foreign.Marshal.Alloc
 import           Foreign.Marshal.Array
 import           Foreign.Ptr
 import qualified Language.C.Inline     as C
-import           Shelly                hiding (FilePath, withTmpDir)
+import           System.Directory      (getCurrentDirectory)
 import           Text.Printf           (printf)
 
 C.include "stddef.h"
 C.include "stdio.h"
 C.include "drmaa.h"
 
-withTmpFile :: FilePath -> (FilePath -> IO a) -> IO a
-withTmpFile dir = bracket create delete
-  where
-    create = shelly $ fmap (T.unpack . head . T.lines) $ silently $
-        run "mktemp" [T.pack $ dir ++ "/tmp_file_XXXXXXXX_delete.me"]
-    delete = shelly . rm_f . fromText . T.pack
+withSession :: IO a -> IO a
+withSession = bracket_ initSession exitSession
 
-withTmpDir :: FilePath -> (FilePath -> IO a) -> IO a
-withTmpDir dir = bracket create delete
-  where
-    create = shelly $ fmap (T.unpack . head . T.lines) $ silently $
-        run "mktemp" ["-d", T.pack $ dir ++ "/tmp_dir_XXXXXXXX_delete.me"]
-    delete = shelly . rm_rf . fromText . T.pack
-
-withSGESession :: IO a -> IO a
-withSGESession f = bracket_ drmaaInit drmaaExit f
-
+{-
 drmaaScript :: String -> DrmaaAttribute -> IO ()
 drmaaScript script config = bracket
     (shelly $ fmap (T.unpack . head . T.lines) $ silently $ run "mktemp" [template])
@@ -44,10 +37,11 @@ drmaaScript script config = bracket
         drmaaRun tmpFl [] config
   where
     template = T.pack $ drmaa_wd config ++ "/drmaa_script.XXXXXXXX.delete.me.sh"
+    -}
 
 -- | Initialize a session
-drmaaInit :: IO ()
-drmaaInit = alloca $ \ptr -> do
+initSession :: IO ()
+initSession = alloca $ \ptr -> do
     status <- [C.block| int {
         int errnum = 0;
         errnum = drmaa_init (NULL, $(char* ptr), DRMAA_ERROR_STRING_BUFFER);
@@ -57,9 +51,10 @@ drmaaInit = alloca $ \ptr -> do
         return 0;
         }|]
     when (status /= 0) $ peekCString ptr >>= error
+{-# INLINE initSession #-}
 
-drmaaExit :: IO ()
-drmaaExit = do
+exitSession :: IO ()
+exitSession = do
     r <- [C.block| int {
         char error[DRMAA_ERROR_STRING_BUFFER];
         int errnum = 0;
@@ -71,16 +66,17 @@ drmaaExit = do
         return 0;
         }|]
     when (r /= 0) $ error "Exit 1"
+{-# INLINE exitSession #-}
 
 data DrmaaAttribute = DrmaaAttribute
-    { drmaa_wd     :: !FilePath
+    { drmaa_wd     :: !(Maybe FilePath)
     , drmaa_env    :: ![(String, String)]
     , drmaa_native :: !String
     } deriving (Show, Read)
 
 defaultDrmaaConfig :: DrmaaAttribute
 defaultDrmaaConfig = DrmaaAttribute
-    { drmaa_wd = "./"
+    { drmaa_wd = Nothing
     , drmaa_env = [ ("DRMAA_ENV_HAS_SET", "True") ]
     , drmaa_native = ""
     }
@@ -91,7 +87,7 @@ drmaaRun exec args config = do
     c_args <- mapM newCString args
 
     -- options
-    wd <- newCString $ drmaa_wd config
+    wd <- get_wd (drmaa_wd config) >>= newCString
     env <- mapM (\(a,b) -> newCString $ a ++ "=" ++ b) $ drmaa_env config
     native <- newCString $ drmaa_native config
 
@@ -212,3 +208,8 @@ drmaaRun exec args config = do
     when (e/=0) $ error $ printf
         "Job failed (status=%d). Please see SGE log for details"
         (fromIntegral e :: Int)
+
+get_wd :: Maybe FilePath -> IO FilePath
+get_wd Nothing  = getCurrentDirectory
+get_wd (Just x) = return x
+{-# INLINE get_wd #-}
