@@ -1,12 +1,12 @@
 name:                drmaa
-version:             0.2.0
-synopsis:            A minimal Haskell bindings to DRMAA C library.
-description:         A minimal Haskell bindings to DRMAA C library.
+version:             0.3.0
+synopsis:            A Haskell bindings to the DRMAA C library.
+description:         A Haskell bindings to the DRMAA C library.
 license:             BSD3
 license-file:        LICENSE
 author:              Kai Zhang
 maintainer:          kai@kzhang.org
-copyright:           (c) 2016-2017 Kai Zhang
+copyright:           (c) 2016-2018 Kai Zhang
 category:            Language
 build-type:          Simple
 extra-source-files:  ChangeLog.md
@@ -16,13 +16,14 @@ library
   ghc-options:         -Wall
   exposed-modules:
     DRMAA
+    DRMAA.Types
+    DRMAA.Bindings
 
   build-depends:
       base >=4.7 && <5.0
-    , inline-c
     , directory
 
   hs-source-dirs:      src
-  c-sources:           src/DRMAA.c
+  build-tools:         c2hs >=0.25.0
   extra-libraries:     drmaa
   default-language:    Haskell2010

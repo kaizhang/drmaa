@@ -1,215 +1,163 @@
-{-# LANGUAGE QuasiQuotes     #-}
-{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE RecordWildCards #-}
 module DRMAA
     ( withSession
-    , initSession
-    , exitSession
-    , DrmaaAttribute(..)
-    , defaultDrmaaConfig
-    , drmaaRun
+    , JobAttributes(..)
+    , JobId(..)
+    , JobResult(..)
+    , RUsage(..)
+    , ExitStatus(..)
+    , defaultJobAttributes
+    , runJob
+    , waitJob
+    , version
     ) where
 
-import           Control.Exception     (bracket_)
-import           Control.Monad         (when)
-import           Foreign.C.String
-import           Foreign.Marshal.Alloc
-import           Foreign.Marshal.Array
-import           Foreign.Ptr
-import qualified Language.C.Inline     as C
+import           Control.Exception     (bracket_, bracket)
+import           Control.Monad         (when, unless, forM)
 import           System.Directory      (getCurrentDirectory)
-import           Text.Printf           (printf)
+import Data.Maybe
+import Data.List (break)
+import Control.Arrow (second)
+import Foreign
+import Foreign.C.String
 
-C.include "stddef.h"
-C.include "stdio.h"
-C.include "drmaa.h"
+import DRMAA.Bindings
+import DRMAA.Types
 
-withSession :: IO a -> IO a
-withSession = bracket_ initSession exitSession
-
-{-
-drmaaScript :: String -> DrmaaAttribute -> IO ()
-drmaaScript script config = bracket
-    (shelly $ fmap (T.unpack . head . T.lines) $ silently $ run "mktemp" [template])
-    (shelly . rm . fromText . T.pack)
-    $ \tmpFl -> do
-        writeFile tmpFl $ "#!/bin/sh\n" ++ script
-        shelly $ run_ "chmod" ["+x", T.pack tmpFl]
-        drmaaRun tmpFl [] config
+withSession :: IO a -> IO a 
+withSession = bracket_ start quit
   where
-    template = T.pack $ drmaa_wd config ++ "/drmaa_script.XXXXXXXX.delete.me.sh"
-    -}
+    start = allocaBytes 1000 $ \errMsg -> do
+        exitCode <- drmaaInit nullPtr errMsg 1000
+        unless (exitCode == 0) $ peekCString errMsg >>= error
+    quit = allocaBytes 1000 $ \errMsg -> do
+        exitCode <- drmaaExit errMsg 1000
+        unless (exitCode == 0) $ peekCString errMsg >>= error
 
--- | Initialize a session
-initSession :: IO ()
-initSession = alloca $ \ptr -> do
-    status <- [C.block| int {
-        int errnum = 0;
-        errnum = drmaa_init (NULL, $(char* ptr), DRMAA_ERROR_STRING_BUFFER);
-        if (errnum != DRMAA_ERRNO_SUCCESS) {
-            return 1;
-        }
-        return 0;
-        }|]
-    when (status /= 0) $ peekCString ptr >>= error
-{-# INLINE initSession #-}
+data JobAttributes = JobAttributes
+    { _wd :: Maybe FilePath  -- ^ specifies the directory name where the job will be executed.
+    , _job_name :: String  -- ^ A job name SHALL contain only alphanumeric and '_' characters.
+    , _native_specification :: Maybe String
+    , _env :: [(String, String)]
+    } deriving (Show)
 
-exitSession :: IO ()
-exitSession = do
-    r <- [C.block| int {
-        char error[DRMAA_ERROR_STRING_BUFFER];
-        int errnum = 0;
-        errnum = drmaa_exit (error, DRMAA_ERROR_STRING_BUFFER);
-        if (errnum != DRMAA_ERRNO_SUCCESS) {
-            fprintf (stderr, "Could not shut down the DRMAA library: %s\n", error);
-            return 1;
-        }
-        return 0;
-        }|]
-    when (r /= 0) $ error "Exit 1"
-{-# INLINE exitSession #-}
+defaultJobAttributes :: JobAttributes
+defaultJobAttributes = JobAttributes
+    { _wd = Nothing
+    , _job_name = "drmaa"
+    , _native_specification = Nothing
+    , _env = [] } 
 
-data DrmaaAttribute = DrmaaAttribute
-    { drmaa_wd     :: !(Maybe FilePath)
-    , drmaa_env    :: ![(String, String)]
-    , drmaa_native :: !String
-    } deriving (Show, Read)
+setJobAttributes :: JobAttributes -> JobTemplate -> IO ()
+setJobAttributes JobAttributes{..} jt = do
+    setAttribute jt "drmaa_job_name" _job_name
+    setAttribute jt "drmaa_wd" =<< get_wd _wd
+    when (isJust _native_specification) $
+        setAttribute jt "drmaa_native_specification" $ fromJust _native_specification
+    unless (null _env) $
+        setVectorAttribute jt "drmaa_v_env" $ map (\(a,b) -> a ++ "=" ++ b) _env
+{-# INLINE setJobAttributes #-}
 
-defaultDrmaaConfig :: DrmaaAttribute
-defaultDrmaaConfig = DrmaaAttribute
-    { drmaa_wd = Nothing
-    , drmaa_env = [ ("DRMAA_ENV_HAS_SET", "True") ]
-    , drmaa_native = ""
-    }
+setAttribute :: JobTemplate -> String -> String -> IO ()
+setAttribute jt name value = allocaBytes 200 $ \errMsg -> do
+    exitCode <- drmaaSetAttribute jt name value errMsg 200
+    unless (exitCode == 0) $ peekCString errMsg >>= error
+{-# INLINE setAttribute #-}
 
-drmaaRun :: FilePath -> [String] -> DrmaaAttribute -> IO ()
-drmaaRun exec args config = do
-    c_exec <- newCString exec
-    c_args <- mapM newCString args
+setVectorAttribute :: JobTemplate -> String -> [String] -> IO ()
+setVectorAttribute jt name value = allocaBytes 200 $ \errMsg ->
+    bracket (mapM newCString value) (mapM_ free) $ \strings ->
+        withArray0 nullPtr strings $ \vec -> do
+            exitCode <- drmaaSetVectorAttribute jt name vec errMsg 200
+            unless (exitCode == 0) $ peekCString errMsg >>= error
+{-# INLINE setVectorAttribute #-}
 
-    -- options
-    wd <- get_wd (drmaa_wd config) >>= newCString
-    env <- mapM (\(a,b) -> newCString $ a ++ "=" ++ b) $ drmaa_env config
-    native <- newCString $ drmaa_native config
+withJobAttributes :: JobAttributes -> (JobTemplate -> IO a) -> IO a
+withJobAttributes ja fun = allocaJobTemplate $ \jt -> do
+    setJobAttributes ja jt
+    fun jt
+{-# INLINE withJobAttributes #-}
 
-    e <- withArray (c_args++[nullPtr]) $ \aptr ->
-        withArray (env ++ [nullPtr]) $ \envPtr -> do
-            [C.block| int {
-            int exception = 0;
-            char error[DRMAA_ERROR_STRING_BUFFER];
-            int errnum = 0;
-            drmaa_job_template_t *jt = NULL;
+newtype JobId = JobId { getJobId :: String }
 
-            errnum = drmaa_allocate_job_template (&jt, error, DRMAA_ERROR_STRING_BUFFER);
+runJob :: FilePath
+       -> [String]
+       -> JobAttributes
+       -> IO (Either String JobId)
+runJob cmd args ja = withJobAttributes ja $ \jt -> allocaBytes 100 $ \jobId ->
+    allocaBytes 200 $ \errMsg -> do
+        setAttribute jt "drmaa_remote_command" cmd
+        setVectorAttribute jt "drmaa_v_argv" args
+        exitCode <- drmaaRunJob jobId 100 jt errMsg 200
+        if exitCode == 0
+            then Right . JobId <$> peekCString jobId
+            else Left <$> peekCString errMsg
+{-# INLINE runJob #-}
 
-            if (errnum != DRMAA_ERRNO_SUCCESS) {
-                fprintf (stderr, "Could not create job template: %s\n", error);
-            } else {
-                /* set options */
-                errnum = drmaa_set_attribute (jt, DRMAA_WD, $(char* wd),
-                                             error, DRMAA_ERROR_STRING_BUFFER);
-                errnum = drmaa_set_vector_attribute (jt, DRMAA_V_ENV, $(const char** envPtr),
-                                             error, DRMAA_ERROR_STRING_BUFFER);
-                errnum = drmaa_set_attribute (jt, DRMAA_NATIVE_SPECIFICATION, $(char* native),
-                                             error, DRMAA_ERROR_STRING_BUFFER);
+data RUsage = RUsage [(String, String)] deriving (Show)
 
-                errnum = drmaa_set_attribute (jt, DRMAA_REMOTE_COMMAND, $(char* c_exec),
-                                             error, DRMAA_ERROR_STRING_BUFFER);
-                if (errnum != DRMAA_ERRNO_SUCCESS) {
-                    fprintf (stderr, "Could not set attribute \"%s\": %s\n",
-                            DRMAA_REMOTE_COMMAND, error);
-                } else {
-                    errnum = drmaa_set_vector_attribute (jt, DRMAA_V_ARGV, $(const char** aptr), error,
-                                                        DRMAA_ERROR_STRING_BUFFER);
-                }
+waitJob :: JobId -> IO (JobResult, RUsage)
+waitJob (JobId jid) = allocaBytes 100 $ \finished -> alloca $ \status ->
+    alloca $ \attr -> allocaBytes 100 $ \errMsg -> do
+        exitCode <- drmaaWait jid finished 100 status (-1) attr errMsg 100
+        case getExitStatus exitCode of
+            Success -> do
+                result <- peek status >>= getJobResult
+                usage <- consumeAttrValues =<< peek attr
+                return (result, RUsage $ map (second tail . break (=='=')) usage)
+            e -> error $ "Could not wait job: " ++ show e
+  where
+    getJobResult st = alloca $ \tmp -> do
+        let aborted next = drmaaWifaborted tmp st nullPtr 0 >> peek tmp >>=
+                (\x -> if x == 1 then return Aborted else next)
+            exited next = drmaaWifexited tmp st nullPtr 0 >> peek tmp >>= ( \x ->
+                if x == 1
+                    then drmaaWexitstatus tmp st nullPtr 0 >>
+                        peek tmp >>= return . Exit . getExitStatus
+                    else next )
+            signaled next = drmaaWifsignaled tmp st nullPtr 0 >> peek tmp >>= ( \x ->
+                if x == 1
+                    then allocaBytes 100 $ \buf ->
+                        drmaaWtermsig buf 100 st nullPtr 0 >>
+                        peekCString buf >>= return . Signaled
+                    else next )
+        aborted $ exited $ signaled $ error "Job finished with unclear conditions"
+{-# INLINE waitJob #-}
 
-                if (errnum != DRMAA_ERRNO_SUCCESS) {
-                    fprintf (stderr, "Could not set attribute \"%s\": %s\n",
-                            DRMAA_REMOTE_COMMAND, error);
-                } else {
-                    char jobid[DRMAA_JOBNAME_BUFFER];
-                    char jobid_out[DRMAA_JOBNAME_BUFFER];
-                    int status = 0;
-                    drmaa_attr_values_t *rusage = NULL;
-
-                    errnum = drmaa_run_job (jobid, DRMAA_JOBNAME_BUFFER, jt, error,
-                                           DRMAA_ERROR_STRING_BUFFER);
-
-                    if (errnum != DRMAA_ERRNO_SUCCESS) {
-                        fprintf (stderr, "Could not submit job: %s\n", error);
-                        exception = 1;
-                    } else {
-                        printf ("Your job has been submitted with id %s\n", jobid);
-
-                        errnum = drmaa_wait (jobid, jobid_out, DRMAA_JOBNAME_BUFFER, &status,
-                                            DRMAA_TIMEOUT_WAIT_FOREVER, &rusage, error,
-                                            DRMAA_ERROR_STRING_BUFFER);
-
-                        if (errnum != DRMAA_ERRNO_SUCCESS) {
-                            fprintf (stderr, "Could not wait for job: %s\n", error);
-                            exception = 1;
-                        } else {
-                            char usage[DRMAA_ERROR_STRING_BUFFER];
-                            int aborted = 0;
-
-                            drmaa_wifaborted(&aborted, status, NULL, 0);
-
-                            if (aborted == 1) {
-                                printf("Job %s never ran\n", jobid);
-                                exception = 1;
-                            } else {
-                                int exited = 0;
-
-                                drmaa_wifexited(&exited, status, NULL, 0);
-
-                                if (exited == 1) {
-                                    int exit_status = 0;
-
-                                    drmaa_wexitstatus(&exit_status, status, NULL, 0);
-                                    printf("Job %s finished regularly with exit status %d\n", jobid, exit_status);
-                                    exception = exit_status;
-                                } else {
-                                    int signaled = 0;
-
-                                    drmaa_wifsignaled(&signaled, status, NULL, 0);
-
-                                    if (signaled == 1) {
-                                        char termsig[DRMAA_SIGNAL_BUFFER+1];
-
-                                        drmaa_wtermsig(termsig, DRMAA_SIGNAL_BUFFER, status, NULL, 0);
-                                        printf("Job %s finished due to signal %s\n", jobid, termsig);
-                                    } else {
-                                        printf("Job %s finished with unclear conditions\n", jobid);
-                                    }
-                                } /* else */
-                            } /* else */
-
-                            /*
-                            printf ("Job Usage:\n");
-
-                            while (drmaa_get_next_attr_value (rusage, usage, DRMAA_ERROR_STRING_BUFFER) == DRMAA_ERRNO_SUCCESS) {
-                                printf ("  %s\n", usage);
-                            }
-                            */
-
-                            drmaa_release_attr_values (rusage);
-                        } /* else */
-                    } /* else */
-                } /* else */
-
-                errnum = drmaa_delete_job_template (jt, error, DRMAA_ERROR_STRING_BUFFER);
-
-                if (errnum != DRMAA_ERRNO_SUCCESS) {
-                    fprintf (stderr, "Could not delete job template: %s\n", error);
-                }
-            } /* else */
-
-            return exception;
-            }|]
-    when (e/=0) $ error $ printf
-        "Job failed (status=%d). Please see SGE log for details"
-        (fromIntegral e :: Int)
+consumeAttrValues :: Ptr AttrValues -> IO [String]
+consumeAttrValues ptr = allocaBytes 1024 $ \tmp -> do
+    result <- loop tmp
+    drmaaReleaseAttrValues ptr
+    return result
+  where
+    loop tmp = do
+        exitCode <- drmaaGetNextAttrValue ptr tmp 1024
+        if (exitCode == 0)
+            then do
+                x <- peekCString tmp
+                xs <- loop tmp
+                return $ x : xs
+            else return []
+{-# INLINE consumeAttrValues #-}
 
 get_wd :: Maybe FilePath -> IO FilePath
 get_wd Nothing  = getCurrentDirectory
 get_wd (Just x) = return x
 {-# INLINE get_wd #-}
+
+version :: IO String
+version = alloca $ \major -> alloca $ \minor -> allocaBytes 100 $ \impl ->
+    allocaBytes 200 $ \errMsg -> do
+        exitCode <- drmaaVersion major minor errMsg 200
+        v <- if (exitCode == 0)
+            then do
+                x <- peek major
+                y <- peek minor
+                return $ show x ++"." ++ show y
+            else error =<< peekCString errMsg
+
+        exitCode' <- drmaaGetDRMAAImplementation impl 100 errMsg 200
+        i <- if (exitCode' == 0)
+            then peekCString impl
+            else error =<< peekCString errMsg
+        return $ "DRMAA v" ++ v ++ "; Implementation: " ++ i
