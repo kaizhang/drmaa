@@ -22,6 +22,7 @@ library
   build-depends:
       base >=4.7 && <5.0
     , directory
+    , exceptions
 
   hs-source-dirs:      src
   build-tools:         c2hs >=0.25.0

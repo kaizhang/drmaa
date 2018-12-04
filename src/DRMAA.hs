@@ -1,4 +1,5 @@
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE LambdaCase          #-}
 module DRMAA
     ( withSession
     , JobAttributes(..)
@@ -7,13 +8,15 @@ module DRMAA
     , RUsage(..)
     , ExitStatus(..)
     , defaultJobAttributes
+    , runAndWait
     , runJob
     , waitJob
     , version
     ) where
 
-import           Control.Exception     (bracket_, bracket)
-import           Control.Monad         (when, unless, forM)
+import           Control.Monad         (when, unless)
+import Control.Monad.Catch (MonadMask, bracket, bracket_)
+import           Control.Monad.IO.Class                      (liftIO, MonadIO)
 import           System.Directory      (getCurrentDirectory)
 import Data.Maybe
 import Data.List (break)
@@ -24,13 +27,13 @@ import Foreign.C.String
 import DRMAA.Bindings
 import DRMAA.Types
 
-withSession :: IO a -> IO a 
+withSession :: (MonadIO m, MonadMask m) => m a -> m a 
 withSession = bracket_ start quit
   where
-    start = allocaBytes 1000 $ \errMsg -> do
+    start = liftIO $ allocaBytes 1000 $ \errMsg -> do
         exitCode <- drmaaInit nullPtr errMsg 1000
         unless (exitCode == 0) $ peekCString errMsg >>= error
-    quit = allocaBytes 1000 $ \errMsg -> do
+    quit = liftIO $ allocaBytes 1000 $ \errMsg -> do
         exitCode <- drmaaExit errMsg 1000
         unless (exitCode == 0) $ peekCString errMsg >>= error
 
@@ -80,9 +83,19 @@ withJobAttributes ja fun = allocaJobTemplate $ \jt -> do
 
 newtype JobId = JobId { getJobId :: String }
 
-runJob :: FilePath
-       -> [String]
-       -> JobAttributes
+-- | Submit a job and wait for the result.
+runAndWait :: FilePath   -- ^ command
+           -> [String]   -- ^ arguments
+           -> JobAttributes   -- ^ attributes
+           -> IO (JobResult, RUsage)
+runAndWait cmd args ja = runJob cmd args ja >>= \case
+    Left err -> error err
+    Right jid -> waitJob jid
+
+-- | Submit a job. The thread won't block.
+runJob :: FilePath    -- ^ command
+       -> [String]    -- ^ arguments
+       -> JobAttributes   -- ^ attributes
        -> IO (Either String JobId)
 runJob cmd args ja = withJobAttributes ja $ \jt -> allocaBytes 100 $ \jobId ->
     allocaBytes 200 $ \errMsg -> do
@@ -96,6 +109,7 @@ runJob cmd args ja = withJobAttributes ja $ \jt -> allocaBytes 100 $ \jobId ->
 
 data RUsage = RUsage [(String, String)] deriving (Show)
 
+-- | Wait for a job to finish.
 waitJob :: JobId -> IO (JobResult, RUsage)
 waitJob (JobId jid) = allocaBytes 100 $ \finished -> alloca $ \status ->
     alloca $ \attr -> allocaBytes 100 $ \errMsg -> do
