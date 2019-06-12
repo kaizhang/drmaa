@@ -63,4 +63,4 @@ getExitStatus code = case code of
     21 -> ReleaseInconsistentState
     22 -> ExitTimeout
     23 -> NoRusage
-    _ -> error "Unknown status code"
+    x -> error $ "Unknown status code: " <> show x
